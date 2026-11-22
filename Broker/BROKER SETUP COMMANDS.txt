@@ -1,0 +1,77 @@
+BROKER SETUP COMMANDS
+
+1. Set up ZeroTier and share ZeroTier IPs across all team members.
+2. Install and start Zookeeper and Kafka on the Broker machine (Harsha Madev Hegde).
+3. Configure Kafka listeners to bind with the ZeroTier interface IP.
+4. Create the required topics for the image processing pipeline.
+
+------------------------------------------------------------
+ZeroTier Setup
+------------------------------------------------------------
+
+1. Install ZeroTier on all four machines (Master, Broker, Worker 1, Worker 2).
+2. Join the same ZeroTier network on all machines:
+   sudo zerotier-cli join <NETWORK_ID>
+
+3. On the ZeroTier web dashboard, authorize all nodes.
+4. Share each system’s ZeroTier IP with the team.
+
+   Example test to confirm connectivity to broker:
+   telnet 10.241.44.154 9092
+   or
+   nc -vz 10.241.44.154 9092
+
+   (If the connection succeeds, Kafka is reachable across the network.)
+
+------------------------------------------------------------
+Zookeeper and Kafka Setup
+------------------------------------------------------------
+
+1. Download and install Kafka on the broker machine:
+   cd /opt
+   sudo wget https://downloads.apache.org/kafka/3.9.0/kafka_2.13-3.9.0.tgz
+   sudo tar -xvzf kafka_2.13-3.9.0.tgz
+   sudo mv kafka_2.13-3.9.0 kafka
+
+2. Start Zookeeper:
+   cd /opt
+   cd kafka
+   bin/zookeeper-server-start.sh config/zookeeper.properties
+
+   (Keep this terminal open and running.)
+
+3. Open a new terminal and start the Kafka broker:
+   cd /opt
+   cd kafka
+   bin/kafka-server-start.sh config/server.properties
+
+4. Edit config/server.properties to use the ZeroTier IP:
+   listeners=PLAINTEXT://10.241.44.154:9092
+   advertised.listeners=PLAINTEXT://10.241.44.154:9092
+------------------------------------------------------------
+Kafka Topic Setup
+------------------------------------------------------------
+
+After Kafka is running keep the termial open and open new terminal create the topics required by the system:
+
+cd /opt/kafka
+bin/kafka-topics.sh --create --bootstrap-server localhost:9092 --replication-factor 1 --partitions 2 --topic tasks
+bin/kafka-topics.sh --create --bootstrap-server localhost:9092 --replication-factor 1 --partitions 2 --topic results
+bin/kafka-topics.sh --create --bootstrap-server localhost:9092 --replication-factor 1 --partitions 1 --topic heartbeats
+
+List all topics to verify:
+bin/kafka-topics.sh --list --bootstrap-server localhost:9092
+
+Expected Output:
+tasks
+results
+heartbeats
+
+------------------------------------------------------------
+TEAM ROLES
+------------------------------------------------------------
+
+Master Node  - Chethan S
+Broker       - Harsha Madev Hegde
+Worker 1     - Mohithkumar M S
+Worker 2     - Eshwar B N

@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Distributed Image Processor</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+      body { padding: 2rem; }
+      .job-card { margin-bottom: 1rem; }
+      .result-img { max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 4px; }
+      .upload-area { border: 2px dashed #ced4da; padding: 1.5rem; border-radius: .5rem; background:#fafafa }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="row mb-4">
+        <div class="col-md-8">
+          <h1 class="h3">Distributed Image Processor</h1>
+          <p class="text-muted">Upload large images and have distributed workers process tiles. Results will appear here when ready.</p>
+        </div>
+        <div class="col-md-4 text-md-end align-self-center">
+          <small class="text-muted">Broker: configured server</small>
+        </div>
+      </div>
+
+      <div class="row mb-4">
+        <div class="col-md-6">
+          <div class="upload-area">
+            <form id="uploadForm" method="post" enctype="multipart/form-data" action="/upload">
+              <div class="mb-3">
+                <label for="imageInput" class="form-label">Select image (min 1024x1024)</label>
+                <input class="form-control" type="file" id="imageInput" name="image" accept="image/*" required>
+              </div>
+              <button id="uploadBtn" class="btn btn-primary">Upload</button>
+              <span id="uploadMsg" class="ms-2"></span>
+            </form>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <h5>Recent Jobs</h5>
+          <div id="jobs-list"></div>
+        </div>
+      </div>
+
+      <div class="row mb-4">
+        <div class="col-md-12">
+          <h5>Reconstructed Image</h5>
+          <div id="main-result-wrap" class="text-center p-3 border rounded" style="min-height: 160px; background:#f8f9fa">
+            <div id="main-result-empty" class="text-muted">No result selected yet</div>
+            <img id="main-result" class="result-img d-none" alt="Reconstructed result">
+            <div id="main-result-title" class="small text-muted mt-2 d-none"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row mb-4">
+        <div class="col-md-12">
+          <h5>Worker Heartbeats</h5>
+          <div id="workers-list" class="row g-2"></div>
+        </div>
+      </div>
+
+      <hr>
+      <footer class="text-center text-muted">Master UI • Results are saved into <code>/static_results</code></footer>
+    </div>
+
+    <script>
+    const uploadForm = document.getElementById('uploadForm');
+    const uploadMsg = document.getElementById('uploadMsg');
+    uploadForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      uploadMsg.textContent = 'Uploading...';
+      const fd = new FormData(uploadForm);
+      try {
+        const res = await fetch('/upload', { method: 'POST', body: fd });
+        if(!res.ok){
+          const text = await res.text();
+          uploadMsg.textContent = 'Error: ' + text;
+          return;
+        }
+        const j = await res.json();
+        uploadMsg.textContent = 'Job created: ' + j.job_id;
+        fetchJobs();
+      } catch(err){
+        uploadMsg.textContent = 'Upload failed';
+      }
+    });
+
+    async function fetchJobs(){
+      try{
+        const res = await fetch('/jobs');
+        const jobs = await res.json();
+        const list = document.getElementById('jobs-list');
+        if(jobs.length === 0){ list.innerHTML = '<div class="text-muted">No jobs yet</div>'; return }
+        list.innerHTML = jobs.map(j => renderJobCard(j)).join('');
+        // attach refresh buttons handlers
+        jobs.forEach(j => { if(document.getElementById('btn-'+j.job_id)) document.getElementById('btn-'+j.job_id).addEventListener('click', ()=> check(j.job_id)); });
+      }catch(e){ console.error(e); }
+    }
+
+    async function fetchWorkers(){
+      try{
+        const res = await fetch('/workers');
+        const workers = await res.json();
+        const wrap = document.getElementById('workers-list');
+        if(workers.length === 0){ wrap.innerHTML = '<div class="text-muted">No heartbeats yet</div>'; return }
+        wrap.innerHTML = workers.map(w => renderWorker(w)).join('');
+      }catch(e){ console.error(e); }
+    }
+
+    function renderWorker(w){
+      const badge = w.status === 'online' ? 'bg-success' : 'bg-secondary';
+      const age = (w.age_seconds != null) ? Math.round(w.age_seconds) + 's ago' : 'n/a';
+      return `
+      <div class="col-md-3">
+        <div class="card p-2">
+          <div><span class="badge ${badge}">${w.status}</span></div>
+          <div class="small mt-1"><strong>${w.worker_id}</strong></div>
+          <div class="text-muted small">last seen: ${w.last_seen} (${age})</div>
+        </div>
+      </div>`;
+    }
+
+    function renderJobCard(j){
+      const progressPct = j.total_tiles ? Math.round((j.received_tiles / j.total_tiles) * 100) : 0;
+      return `
+      <div class="card job-card">
+        <div class="card-body">
+          <h6 class="card-title">Job: <code>${j.job_id}</code></h6>
+          <p class="card-text mb-1">Status: <strong id="status-${j.job_id}">${j.status}</strong></p>
+          <div class="progress mb-2" style="height:10px">
+            <div id="prog-${j.job_id}" class="progress-bar" role="progressbar" style="width: ${progressPct}%">${j.received_tiles}/${j.total_tiles}</div>
+          </div>
+          <div id="result-${j.job_id}"></div>
+          <div class="mt-2">
+            <button id="btn-${j.job_id}" class="btn btn-sm btn-outline-secondary">Refresh</button>
+            <button class="btn btn-sm btn-outline-primary" onclick="showJob('${j.job_id}')">Show</button>
+            <button class="btn btn-sm btn-link" onclick="copyId('${j.job_id}')">Copy ID</button>
+          </div>
+        </div>
+      </div>`;
+    }
+
+    function copyId(id){ navigator.clipboard?.writeText(id); }
+
+    async function check(job_id){
+      try{
+        const res = await fetch('/status/' + job_id);
+        const s = await res.json();
+        document.getElementById('status-' + job_id).innerText = s.status;
+        const pct = s.total_tiles ? Math.round((s.received_tiles / s.total_tiles) * 100) : 0;
+        const prog = document.getElementById('prog-' + job_id);
+        if(prog){ prog.style.width = pct + '%'; prog.innerText = s.received_tiles + '/' + s.total_tiles; }
+        if(s.status === 'done' && s.result_url){
+          document.getElementById('result-' + job_id).innerHTML = `<img class="result-img mt-2" src="${s.result_url}" alt="result">`;
+          // Also show in main preview
+          setMainResult(s.result_url, job_id);
+        }
+      }catch(e){ console.error(e); }
+    }
+
+    async function showJob(job_id){
+      try{
+        const res = await fetch('/status/' + job_id);
+        const s = await res.json();
+        if(s.status === 'done' && s.result_url){
+          setMainResult(s.result_url, job_id);
+        }
+      }catch(e){ console.error(e); }
+    }
+
+    let mainResultSet = false;
+    function setMainResult(url, jobId){
+      const empty = document.getElementById('main-result-empty');
+      const img = document.getElementById('main-result');
+      const title = document.getElementById('main-result-title');
+      if(empty) empty.classList.add('d-none');
+      img.src = url;
+      img.classList.remove('d-none');
+      title.textContent = 'Job ' + jobId;
+      title.classList.remove('d-none');
+      mainResultSet = true;
+    }
+
+    // poll
+    setInterval(() => { fetchJobs(); fetchWorkers(); }, 4000);
+    fetchJobs();
+    fetchWorkers();
+    </script>
+  </body>
+</html>
